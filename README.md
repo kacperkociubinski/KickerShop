@@ -21,6 +21,7 @@ Server: Microsoft SQL Server / SQL Azure
 - applying business logic,
 - implementation of triggers and exceptions,
 - optimistic blocking.
+
 Client: ASP.Net MVC
 - views for showing tables,
 - controllers that support adding, editing, deleting,
