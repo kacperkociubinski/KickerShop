@@ -1,0 +1,45 @@
+﻿@model IEnumerable<KickerShop.Models.OrderDetails>
+
+@{
+    ViewBag.Title = "OrderDetails";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+
+<h2>Order details</h2>
+<dl class="dl-horizontal">
+     <b>Order id:</b>
+     @Html.DisplayFor(model => model.Last().Order_id)
+</dl>
+<p>
+    @Html.ActionLink("Back to clients list", "Index")
+</p>
+<table class="table">
+    <tr>
+        <th>
+            Product name
+        </th>
+        <th>
+            @Html.DisplayNameFor(model => model.Quantity)
+        </th>
+        <th>
+            Unit price
+        </th>
+        <th></th>
+    </tr>
+
+    @foreach (var item in Model)
+    {
+        <tr>
+            <td>
+                @Html.DisplayFor(modelItem => item.Products.Name)
+            </td>
+            <td>
+                @Html.DisplayFor(modelItem => item.Quantity)
+            </td>
+            <td>
+                @Html.DisplayFor(modelItem => item.Products.Unit_price)
+            </td>
+        </tr>
+    }
+
+</table>

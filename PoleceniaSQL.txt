@@ -1,0 +1,257 @@
+Stan produktu w magazynie nie może być mniejszy od 0. - Aktualizacja, tworzenie Produktu
+
+CREATE TRIGGER [dbo].[ProductQuantity]
+ON [dbo].[Products]
+FOR  insert, update AS 
+IF EXISTS (
+        SELECT *
+        FROM inserted i
+        WHERE i.Quantity < 0)
+BEGIN
+	ROLLBACK
+    RAISERROR ('Ilosc dodawanego produktu zawsze wieksza od zera', 11, 1)
+END
+
+Sprawdzenie:
+
+INSERT INTO Products(Id, Name, Unit_price, Quantity)
+VALUES (12,'Spodnie Addidas', 90.00, -1);
+
+Cena produktu nie może być mniejsza od zera
+
+CREATE TRIGGER [dbo].[ProductUnitPrice]
+ON [dbo].[Products]
+FOR  insert, update AS 
+IF EXISTS (
+        SELECT *
+        FROM inserted i
+        WHERE i.Unit_price < 0)
+BEGIN
+	ROLLBACK
+    RAISERROR ('Cena produktu nie może być mniejsza od 0', 11, 1)
+END
+
+Klient bez uzupełnionych danych nie może złozyc zamówienia
+
+create trigger [dbo].[OrderAdress]
+on [dbo].[Orders]
+for Insert,Update
+as
+begin
+declare @street varchar(40), @city varchar(20), @zip varchar(5)
+SELECT @street = c.Street, @city = c.City , @zip = c.Zip
+from Clients c, inserted i
+where c.Id= i.Client_id
+if (@street is null OR @city is null OR @zip is null)
+begin
+rollback
+raiserror('Klient nie posiada uzupełnionego adresu',16,1)
+end
+end
+
+Nie można złożyć zamówienia na produkt kiedy jego stan wynosi 0. - aktualizacja, towrzenie Zamówienia
+
+CREATE TRIGGER [dbo].[OrderQuantity]
+ON [dbo].[OrderDetails]
+FOR  insert, update AS 
+IF EXISTS (
+        SELECT *
+        FROM inserted i, Products p
+        WHERE p.Id = i.Product_id AND p.Quantity = 0)
+BEGIN
+	ROLLBACK
+    RAISERROR ('Brak produktu na magazynie', 11, 1)
+END
+
+Po złożeniu zamówienia stan produktu na magazynie zmniejsza się w zaleznośći od ilości,
+informacja o maksymalnym zamówieniu gdy przewyżsyzmy stan magazynowy. - aktualizacja, tworznei zamowienia
+
+CREATE TRIGGER [dbo].[WarehouseQuantity]
+ON [dbo].[OrderDetails]
+FOR  insert, update AS 
+IF EXISTS (
+        SELECT *
+        FROM inserted i, Products p
+        WHERE p.Id = i.Product_id AND i.Quantity <= p.Quantity)
+BEGIN
+	UPDATE
+	 Products 
+	SET
+	 Quantity = p.Quantity-i.Quantity
+	FROM
+	Products p ,inserted i 
+	WHERE
+	i.Product_id = p.Id
+end
+ELSE 
+BEGIN
+	
+		DECLARE @ProductQuantity INT
+		SElect @ProductQuantity = p.Quantity from inserted i, Products p WHERE p.Id = i.Product_id
+		RAISERROR ('Nie wystarczająca ilość produktu na magazynie (maksymalna ilość %i)' , 11, 1, @ProductQuantity)
+		ROLLBACK
+END
+
+PROCEDURO-TRIGGER
+
+Obsłyga rabatów oraz darmowej przesyłki i tworzenia Payments na podstawie OrderDetails
+
+CREATE   procedure [dbo].[InsertPayment]
+(@order_id int)
+as
+begin
+ declare @total_value float
+ declare @delivery_cost int
+ declare @discount int
+ declare @pay_value float
+
+ select  @total_value = sum(od.Quantity * p.Unit_price) from OrderDetails od, Products p Where od.Product_id = p.Id AND od.Order_id = @order_id;
+ select  @delivery_cost = d.Unit_price from [Delivery types] d, Orders o where o.Id = @order_id AND d.Id = o.DeliveryType_id;
+ 
+ select @discount = 0
+
+ if (@total_value >= 150.00 AND @total_value < 300)
+	begin
+	 select @delivery_cost = 0;
+	 select @discount = 0;
+	end
+
+if (@total_value >= 300.00 AND @total_value < 500)
+	begin
+	 select @delivery_cost = 0;
+	 select @discount = 10;
+	end
+
+if (@total_value >= 500)
+	begin
+	 select @delivery_cost = 0;
+	 select @discount = 15;
+	end
+select  @pay_value = @delivery_cost + (@total_value*(100 - @discount))/100;
+end
+insert into Payments(Ord_id, Total_value, Delivery_cost, Discount, Pay_value)
+values(@order_id, @total_value, @delivery_cost, @discount, @pay_value);
+
+PROCEDURY
+
+Historia zamówień klienta
+
+drop procedure [ClientHistory];
+
+CREATE   procedure [dbo].[ClientHistory]
+@clientid int
+as
+begin
+  Select o.OrderDate, p.Id As ProductId, p.Name from Products p, Orders o, OrderDetails od
+  Where o.Client_id = @clientid AND o.Id = od.Order_id AND od.Product_id = p.Id
+end
+
+FUNKCJE
+
+Ilość zamówień złozonych przez jednego klienta
+
+CREATE FUNCTION  [dbo].[OrdersCount](@clientid int)
+RETURNS INT
+as
+BEGIN 
+	declare @count INT
+   SELECT @count = count(*)
+   FROM Orders o
+   where o.Client_id = @clientid
+   RETURN @count; 
+END
+
+
+
+
+BLOKOWANIE OPTYMISTYCZNE - procedura edit dla Products
+
+CREATE   procedure [dbo].[ProductUpdate]
+@productid int,
+@name varchar(40),
+@unitprice float,
+@quantity int
+as
+begin
+	declare @rowid rowversion
+
+	select @rowid = rowid
+	from Products
+	where Id = @productid
+	
+	--waitfor delay '00:00:10'
+
+	UPDATE Products
+       SET Name = @name,
+           Unit_price = @unitprice,
+		   Quantity = @quantity
+       WHERE Id = @productid
+           AND rowid = @rowid;
+
+	if @@ROWCOUNT = 0
+		if not exists ( select * from Products where Id = @productid)
+		RAISERROR ('Konflikt aktualizacji: Rekord z produktem został usunięty', 11, 1)
+	else
+		RAISERROR ('Konflikt aktualizacji: Rekord z produktem został zaktualizowany wcześniej', 11, 1)
+end
+
+
+
+
+-- Procedura do query2 podająca satystykę związaną z zaoszczędzonymi pieniędzmi ze znizki
+go
+CREATE   procedure DiscountValue
+as
+begin
+ declare @total_value float
+ declare @total_disconted_value float
+ declare @distinction float
+ declare @dicont_pro float
+
+ select @total_value =  sum(Total_value) from Payments;
+ select @total_disconted_value =  sum(Pay_value) from Payments;
+ select @distinction = @total_value - @total_disconted_value;
+ select @dicont_pro = (@distinction / @total_disconted_value) *100;
+
+ select @total_value as Total_value, @total_disconted_value as Total_Disconted_Value, @distinction as  Distinction, @dicont_pro as Procent;
+end
+
+drop procedure DiscountValue
+
+--procedura związana z query3 podająca n najbardziej dochodowych produktow
+
+go
+CREATE procedure MostProfitableProducts
+@number int
+as
+begin
+	select top (@number) od.Product_id, p.Name, sum(od.Quantity * p.Unit_price) as Total 
+	from OrderDetails od join Products p on od.Product_id = p.Id 
+	group by od.Product_id, p.Name
+	order by Total DESC;  
+end
+
+drop procedure MostProfitableProducts;
+
+select * from Payments;
+
+Select count(p.Payment_id) as FreeDelivery from Payments p where p.Delivery_cost = 0;
+
+
+-- widok pozwalajacy na generowania raportu
+go
+create view Report as
+select ISNULL(ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), -999)
+as Id, year(o.OrderDate) 
+as Jare, sum(od.Quantity * p.Unit_price) 
+as Total, count(o.Id) 
+as Order_Count, sum(od.Quantity * p.Unit_price) / count(o.Id) 
+as Avg_Per_Order  
+from Orders o 
+join OrderDetails od on o.Id = od.Order_id 
+join Products p on p.Id = od.Product_id
+group by year(o.OrderDate);
+
+drop view Report;
+
+select * from Report;
